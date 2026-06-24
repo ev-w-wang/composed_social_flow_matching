@@ -9,5 +9,7 @@ Config = {
     "num_points": 10,
     "hidden_dim": 64,
     "n_samples": 16,
+    "tent_sigma": 5.0,
     "step_size": 0.001,
+    "grid_size": 128,
 }

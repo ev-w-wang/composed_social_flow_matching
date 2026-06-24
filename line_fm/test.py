@@ -35,6 +35,10 @@ solution = solver.sample(
 )
 
 trajectories = solution[-1].detach().cpu()
+sol_start_mean = trajectories[:, 0, :].mean(dim=0).to(device)
+sol_end_mean = trajectories[:, -1, :].mean(dim=0).to(device)
+print(f"Start error: {torch.norm(sol_start_mean - start[0, :]).item():.4f}")
+print(f"End error: {torch.norm(sol_end_mean - end[0, :]).item():.4f}")
 for i in range(n_samples):
     plt.plot(trajectories[i, :, 0], trajectories[i, :, 1], "o-", alpha=0.6)
 plt.plot(

@@ -3,7 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 from config import Config
-from occupancy_utils import generate_occupancy, ground_truth_field
+from occupancy_utils import generate_occupancy, ground_truth_field, repulsion_loss_mask
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -21,12 +21,12 @@ model.eval()
 occupancy = generate_occupancy(device, batch_size=1)
 ground_truth = ground_truth_field(occupancy, device)
 output = model.forward_field(occupancy)
-obstacle_mask = (occupancy > 0.5).float()
-loss = torch.sum((output - ground_truth) ** 2 * obstacle_mask) / obstacle_mask.sum().clamp(min=1)
+loss_mask = repulsion_loss_mask(ground_truth)
+loss = torch.sum((output - ground_truth) ** 2 * loss_mask) / loss_mask.sum().clamp(min=1)
 print(f"Loss: {loss.item():.4f}")
 
 @torch.no_grad()
-def plot_vector_field(ax, occupancy, field, step=4, obstacle_only=True, title=""):
+def plot_vector_field(ax, occupancy, field, step=4, active_only=True, title=""):
     """
     occupancy: (H, W) binary grid
     field: (2, H, W) with field[0]=vx (columns), field[1]=vy (rows)
@@ -45,8 +45,9 @@ def plot_vector_field(ax, occupancy, field, step=4, obstacle_only=True, title=""
     U = vx[Y, X]
     V = vy[Y, X]
 
-    if obstacle_only:
-        mask = occ[Y, X] > 0.5
+    if active_only:
+        magnitude = np.sqrt(U ** 2 + V ** 2)
+        mask = magnitude > 1e-3
         U = np.where(mask, U, np.nan)
         V = np.where(mask, V, np.nan)
 

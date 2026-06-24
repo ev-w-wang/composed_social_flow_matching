@@ -8,4 +8,7 @@ Config = {
     "state_dim": 2,
     "hidden_dim": 128,
     "base_dim": 32,
+    "repulsion_eps": 1.0,
+    "repulsion_radius": 20.0,
+    "repulsion_max_magnitude": 2.0,
 }

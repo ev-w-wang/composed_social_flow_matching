@@ -2,6 +2,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+try:
+    from occupancy_utils import sample_field_at_points
+except ModuleNotFoundError:
+    from obstacle_conditioning.occupancy_utils import sample_field_at_points
+
 
 class ConvBlock(nn.Module):
     def __init__(self, in_ch, out_ch, stride=1):
@@ -53,18 +58,6 @@ class OccupancyFieldEncoder(nn.Module):
         if field.shape[-2:] != input_size:
             field = F.interpolate(field, size=input_size, mode="bilinear", align_corners=True)
         return field
-
-
-def sample_field_at_points(field, points, grid_size):
-    """
-    field: (B, 2, H, W)
-    points: (B, num_points, 2) in grid coordinates [0, grid_size)
-    returns: (B, num_points, 2)
-    """
-    grid = points / (grid_size - 1) * 2 - 1
-    grid = grid.flip(-1).unsqueeze(2)
-    sampled = F.grid_sample(field, grid, mode="bilinear", padding_mode="border", align_corners=True)
-    return sampled.squeeze(-1).permute(0, 2, 1)
 
 
 class ObstacleConditioning(nn.Module):
