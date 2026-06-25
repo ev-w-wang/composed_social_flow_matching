@@ -4,9 +4,10 @@ from line_fm.network import FM
 from obstacle_conditioning.network import ObstacleConditioning
 from line_fm.config import Config as line_fm_Config
 from obstacle_conditioning.config import Config as obstacle_Config
-from model_wrapper import ComposedModelWrapper
+from model_wrapper import ComposedModelWrapper, ComposedModelWrapperWithRepulsionField
 from flow_matching.solver import ODESolver
-from obstacle_conditioning.occupancy_utils import generate_occupancy
+from obstacle_conditioning.occupancy_utils import generate_occupancy, AnalyticRepulsionField
+from obstacle_conditioning.occupancy_utils import AnalyticRepulsionField
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -14,9 +15,9 @@ num_points = line_fm_Config["num_points"]
 state_dim = line_fm_Config["state_dim"]
 grid_size = obstacle_Config["grid_size"]
 n_samples = line_fm_Config["n_samples"]
-alpha_start = 5
-alpha_stop = 15
-alpha_step = 1
+alpha_start = .5
+alpha_stop = 1.5
+alpha_step = .1
 
 
 def load_models():
@@ -118,6 +119,21 @@ def run_compose_test(line_fm_model, obstacle_model, occupancy, start, end, noise
     )
     return trajectories, evaluate_trajectories(trajectories, start, end, occupancy)
 
+def run_compose_test_with_repulsion_field(line_fm_model, repulsion_field, occupancy, start, end, noise, alpha):
+    input = torch.cat([start, end], dim=1)
+    time_grid = torch.tensor([0.0, 1.0], device=device)
+    solver = ODESolver(
+        ComposedModelWrapperWithRepulsionField(line_fm_model, repulsion_field, input, noise, alpha)
+    )
+    trajectories = solver.sample(
+        x_init=noise,
+        time_grid=time_grid,
+        step_size=line_fm_Config["step_size"],
+        method="midpoint",
+        return_intermediates=False,
+    )
+    return trajectories, evaluate_trajectories(trajectories, start, end, occupancy)
+
 
 def plot_trajectories(occupancy, trajectories, start, end, alpha, path):
     trajectories = trajectories.detach().cpu()
@@ -172,7 +188,11 @@ def print_summary_table(results):
 def main():
     line_fm_model, obstacle_model = load_models()
     occupancy = generate_occupancy(device, batch_size=1)
-    start, end = sample_start_end(occupancy)
+    rep_field = AnalyticRepulsionField(occupancy, device)   
+    rep_field.plot_vector_field()
+    # start, end = sample_start_end(occupancy)
+    start = torch.tensor([[0.0, 0.0]], device=device)
+    end = torch.tensor([[grid_size - 1, grid_size - 1]], device=device)
     noise = torch.randn(n_samples, num_points, state_dim, device=device)
 
     assert is_free(start[0], occupancy), "start must be in free space"
@@ -185,8 +205,11 @@ def main():
     best_alpha, best_stats, best_trajectories = None, None, None
 
     for alpha in alpha_values:
-        trajectories, stats = run_compose_test(
-            line_fm_model, obstacle_model, occupancy, start, end, noise, alpha
+        # trajectories, stats = run_compose_test(
+        #     line_fm_model, obstacle_model, occupancy, start, end, noise, alpha
+        # )
+        trajectories, stats = run_compose_test_with_repulsion_field(
+            line_fm_model, rep_field, occupancy, start, end, noise, alpha
         )
         print_run_stats(alpha, stats)
         results.append((alpha, stats))

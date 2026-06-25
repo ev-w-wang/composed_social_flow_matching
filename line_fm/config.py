@@ -6,7 +6,7 @@ Config = {
     "lr": 1e-3,
     "input_dim": 4,
     "state_dim": 2,
-    "num_points": 10,
+    "num_points": 100,
     "hidden_dim": 64,
     "n_samples": 16,
     "tent_sigma": 5.0,

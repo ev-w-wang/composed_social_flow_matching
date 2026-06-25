@@ -11,9 +11,10 @@ except ModuleNotFoundError:
 
 grid_size = Config["grid_size"]
 repulsion_eps = Config.get("repulsion_eps", 1.0)
+repulsion_clearance = Config.get("repulsion_clearance", 5.0)
 repulsion_radius = Config.get("repulsion_radius", 20.0)
 repulsion_max_magnitude = Config.get("repulsion_max_magnitude", 1.0)
-
+repulsion_scale = Config.get("repulsion_scale", 100.0)
 
 @torch.no_grad()
 def plot_vector_field(ax, occupancy, field, step=4, active_only=True, title=""):
@@ -59,7 +60,7 @@ def plot_vector_field(ax, occupancy, field, step=4, active_only=True, title=""):
 @torch.no_grad()
 def _sample_obstacle_map(h, w, device):
     occ = torch.zeros(h, w, device=device)
-    num_obstacles = random.randint(10, 20)
+    num_obstacles = random.randint(5, 10)
     for _ in range(num_obstacles):
         if random.random() < 0.5:
             rw = random.randint(max(4, w // 20), max(5, w // 5))
@@ -90,45 +91,59 @@ def generate_occupancy(device, batch_size=1):
 
 
 @torch.no_grad()
+def _repulsion_field_single(occ_bin):
+    h, w = occ_bin.shape
+    rows = np.arange(h, dtype=np.float32)[:, None]
+    cols = np.arange(w, dtype=np.float32)[None, :]
+
+    fx = np.zeros((h, w), dtype=np.float32)
+    fy = np.zeros((h, w), dtype=np.float32)
+
+    # Free space: push away from nearest obstacle cell.
+    dist_to_obs, idx_obs = distance_transform_edt(~occ_bin, return_indices=True)
+    dx = cols - idx_obs[1].astype(np.float32)
+    dy = rows - idx_obs[0].astype(np.float32)
+    norm = np.sqrt(dx * dx + dy * dy) + 1e-8
+    free_near = (~occ_bin) & (dist_to_obs > 0) & (dist_to_obs < repulsion_clearance)
+    strength = np.maximum(
+        1.0 / (dist_to_obs + repulsion_eps) - 1.0 / (repulsion_clearance + repulsion_eps), 0.0
+    )
+    fx[free_near] = (dx[free_near] / norm[free_near]) * strength[free_near]
+    fy[free_near] = (dy[free_near] / norm[free_near]) * strength[free_near]
+
+    # Inside obstacles: push toward nearest free cell, stronger at depth.
+    if occ_bin.any():
+        dist_in, idx_free = distance_transform_edt(occ_bin, return_indices=True)
+        dx_in = idx_free[1].astype(np.float32) - cols
+        dy_in = idx_free[0].astype(np.float32) - rows
+        norm_in = np.sqrt(dx_in * dx_in + dy_in * dy_in) + 1e-8
+        inside = occ_bin
+        strength_in = dist_in + repulsion_eps
+        fx[inside] = (dx_in[inside] / norm_in[inside]) * strength_in[inside]
+        fy[inside] = (dy_in[inside] / norm_in[inside]) * strength_in[inside]
+
+    magnitude = np.sqrt(fx * fx + fy * fy)
+    clip = magnitude > repulsion_max_magnitude
+    fx[clip] *= repulsion_max_magnitude / magnitude[clip]
+    fy[clip] *= repulsion_max_magnitude / magnitude[clip]
+    return fx, fy
+
+
+@torch.no_grad()
 def ground_truth_field(occupancy, device):
     """
-    Traditional repulsive field: push away from nearest obstacle.
-    Free space (within repulsion_radius): magnitude ~ 1 / distance to wall.
-    Inside obstacles: magnitude grows with depth (dist_in) for strong escape from interior.
+    Repulsive field using nearest-point directions.
+    Free space (within repulsion_clearance): away from nearest obstacle, zero at clearance.
+    Inside obstacles: toward nearest free cell, magnitude ~ dist_in.
     """
     occ = (occupancy > 0.5).cpu().numpy()
     fields = np.zeros((occ.shape[0], 2, grid_size, grid_size), dtype=np.float32)
 
     for b in range(occ.shape[0]):
-        occ_bin = occ[b, 0].astype(bool)
-        dist = distance_transform_edt(~occ_bin).astype(np.float32)
-        gy, gx = np.gradient(dist)
-
-        denom = dist + repulsion_eps
-        fx = gx / denom
-        fy = gy / denom
-
-        if occ_bin.any():
-            dist_in = distance_transform_edt(occ_bin).astype(np.float32)
-            giy, gix = np.gradient(dist_in)
-            inside = occ_bin
-            # Inside obstacles: scale by dist_in (not 1/dist_in) so push is stronger
-            # at the center than near the boundary — helps escape deep samples.
-            fx[inside] = -gix[inside] * (dist_in[inside] + repulsion_eps)
-            fy[inside] = -giy[inside] * (dist_in[inside] + repulsion_eps)
-
-        far = (dist > repulsion_radius) & ~occ_bin
-        fx[far] = 0.0
-        fy[far] = 0.0
-
-        magnitude = np.sqrt(fx ** 2 + fy ** 2)
-        clip = magnitude > repulsion_max_magnitude
-        fx[clip] *= repulsion_max_magnitude / magnitude[clip]
-        fy[clip] *= repulsion_max_magnitude / magnitude[clip]
-
+        fx, fy = _repulsion_field_single(occ[b, 0].astype(bool))
         fields[b, 0] = fx
         fields[b, 1] = fy
-
+    fields *= repulsion_scale
     return torch.from_numpy(fields).to(device=device, dtype=occupancy.dtype)
 
 
@@ -186,6 +201,13 @@ class AnalyticRepulsionField:
     @torch.no_grad()
     def __call__(self, points):
         return self.at_points(points)
+
+    def plot_vector_field(self):
+        fig, axes = plt.subplots(1, 1, figsize=(6, 6))
+        plot_vector_field(axes, self.occupancy[0, 0], self.field[0], step=1, active_only=False, title="Repulsion field")
+        plt.tight_layout()
+        plt.savefig("test_images/repulsion_field.png")
+        plt.close()
 
 
 if __name__ == "__main__":
